@@ -119,17 +119,15 @@ io.on('connection', (socket) => {
     const room = rooms.get(code);
     if (!room) return cb({ ok: false, error: "Couldn't find that room code." });
 
-    let idx;
-    if (room.players[1] === null) {
-      idx = 1;
-      room.players[1] = { id: socket.id, name, connected: true };
-      if (room.phase === 'lobby') room.phase = 'menu';
-    } else {
-      // Reclaim a disconnected seat (e.g. after a page refresh).
-      idx = room.players.findIndex((p) => p && !p.connected);
-      if (idx === -1) return cb({ ok: false, error: 'That room is already full.' });
-      room.players[idx] = { id: socket.id, name, connected: true };
-    }
+    // Prefer reclaiming your own seat after a refresh (matched by name),
+    // then an empty partner seat, then any disconnected seat.
+    let idx = room.players.findIndex((p) => p && !p.connected && p.name === name);
+    if (idx === -1 && room.players[1] === null) idx = 1;
+    if (idx === -1) idx = room.players.findIndex((p) => p && !p.connected);
+    if (idx === -1) return cb({ ok: false, error: 'That room is already full.' });
+
+    room.players[idx] = { id: socket.id, name, connected: true };
+    if (room.phase === 'lobby' && room.players[1] !== null) room.phase = 'menu';
 
     if (room.emptyTimer) {
       clearTimeout(room.emptyTimer);
@@ -217,11 +215,22 @@ io.on('connection', (socket) => {
     player.connected = false;
     broadcast(room);
     if (room.players.every((p) => !p || !p.connected)) {
-      // Keep the room around briefly so refreshed players can rejoin.
-      room.emptyTimer = setTimeout(() => rooms.delete(room.code), 5 * 60 * 1000);
+      // Keep the room around so players whose phones locked can rejoin.
+      room.emptyTimer = setTimeout(() => rooms.delete(room.code), 15 * 60 * 1000);
     }
   });
 });
+
+// On free hosting (Render) the server is spun down after ~15 idle minutes,
+// which wipes all in-memory rooms. While any room has a connected player,
+// ping our own public URL so an active game is never interrupted.
+const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_URL) {
+  setInterval(() => {
+    const anyActive = [...rooms.values()].some((r) => r.players.some((p) => p && p.connected));
+    if (anyActive) fetch(SELF_URL).catch(() => {});
+  }, 10 * 60 * 1000);
+}
 
 server.listen(PORT, () => {
   console.log(`Couple Games running at http://localhost:${PORT}`);

@@ -1,4 +1,15 @@
 /* global io */
+// If the Socket.IO client script failed to load (flaky mobile network, edge
+// hiccup), every button would silently do nothing. Surface it and retry.
+if (typeof io === 'undefined') {
+  const el = document.getElementById('home-error');
+  if (el) {
+    el.textContent = "Couldn't reach the game server — retrying automatically…";
+    el.classList.remove('hidden');
+  }
+  setTimeout(() => location.reload(), 5000);
+  throw new Error('socket.io client failed to load');
+}
 const socket = io();
 
 let myIdx = null;
@@ -34,12 +45,42 @@ function showError(msg) {
   el.classList.remove('hidden');
 }
 
+// Remember the session so a page reload (e.g. phone screen lock) can rejoin.
+function saveSession(code) {
+  try {
+    sessionStorage.setItem('cg-session', JSON.stringify({ code, name: myName() }));
+    localStorage.setItem('cg-name', myName());
+  } catch (e) { /* storage unavailable — rejoin just won't be automatic */ }
+}
+
+function savedSession() {
+  try { return JSON.parse(sessionStorage.getItem('cg-session')); } catch (e) { return null; }
+}
+
+function clearSession() {
+  try { sessionStorage.removeItem('cg-session'); } catch (e) { /* ignore */ }
+}
+
+// The free-tier server can take ~30s to wake up; don't let buttons fail silently.
+function ensureConnected() {
+  if (socket.connected) return true;
+  showError('Connecting to the server — this can take up to 30 seconds if it was asleep. Try again in a moment.');
+  return false;
+}
+
+try {
+  const savedName = localStorage.getItem('cg-name');
+  if (savedName) $('name-input').value = savedName;
+} catch (e) { /* ignore */ }
+
 $('btn-create').addEventListener('click', () => {
   if (!myName()) return showError('Enter your name first.');
+  if (!ensureConnected()) return;
   socket.emit('createRoom', { name: myName() }, (res) => {
     if (!res.ok) return showError(res.error);
     myIdx = res.idx;
     state = res.state;
+    saveSession(res.code);
     render();
   });
 });
@@ -48,10 +89,12 @@ $('btn-join').addEventListener('click', () => {
   if (!myName()) return showError('Enter your name first.');
   const code = $('code-input').value.trim().toUpperCase();
   if (code.length !== 4) return showError('Room codes are 4 letters.');
+  if (!ensureConnected()) return;
   socket.emit('joinRoom', { code, name: myName() }, (res) => {
     if (!res.ok) return showError(res.error);
     myIdx = res.idx;
     state = res.state;
+    saveSession(res.code);
     render();
   });
 });
@@ -92,16 +135,33 @@ socket.on('state', (s) => {
 
 socket.on('disconnect', () => toast('Connection lost — trying to reconnect…', 4000));
 socket.on('connect', () => {
-  // After a reconnect, our old seat is stale; rejoin with the same code.
+  // Rejoin after a reconnect (stale seat) or a fresh page load (saved session,
+  // e.g. the phone reloaded the tab after a screen lock).
+  let target = null;
   if (state && myIdx !== null) {
-    socket.emit('joinRoom', { code: state.code, name: myName() || 'Player' }, (res) => {
-      if (res.ok) {
-        myIdx = res.idx;
-        state = res.state;
-        render();
-      }
-    });
+    target = { code: state.code, name: myName() || 'Player' };
+  } else {
+    const saved = savedSession();
+    if (saved && saved.code) target = { code: saved.code, name: saved.name || myName() || 'Player' };
   }
+  if (!target) return;
+
+  const wasInRoom = state !== null;
+  socket.emit('joinRoom', { code: target.code, name: target.name }, (res) => {
+    if (res.ok) {
+      myIdx = res.idx;
+      state = res.state;
+      render();
+    } else {
+      // The server restarted and the room is gone — reset instead of leaving
+      // a dead lobby on screen.
+      clearSession();
+      state = null;
+      myIdx = null;
+      render();
+      if (wasInRoom) toast('Your room expired — please create a new one.', 5000);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
