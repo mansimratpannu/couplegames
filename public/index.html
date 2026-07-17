@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Couple Games</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e11d48'><path d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- HOME -->
+    <section id="screen-home" class="screen">
+      <div class="hero">
+        <div class="hero-mark">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </div>
+        <h1>Couple Games</h1>
+        <p class="tagline">Play together, from any two phones</p>
+      </div>
+      <div class="card">
+        <label for="name-input">Your name</label>
+        <input id="name-input" type="text" maxlength="20" placeholder="e.g. Sam" autocomplete="off" />
+        <button id="btn-create" class="btn btn-primary">Create a room</button>
+        <div class="divider"><span>or join your partner</span></div>
+        <input id="code-input" type="text" maxlength="4" placeholder="ROOM CODE" autocomplete="off" class="code-input" />
+        <button id="btn-join" class="btn btn-secondary">Join room</button>
+        <p id="home-error" class="error hidden"></p>
+      </div>
+    </section>
+
+    <!-- WAITING FOR PARTNER -->
+    <section id="screen-wait" class="screen hidden">
+      <div class="card center">
+        <h2>Room created</h2>
+        <p>Share this code with your partner:</p>
+        <div id="room-code-big" class="room-code">····</div>
+        <p class="muted pulse">Waiting for them to join…</p>
+      </div>
+    </section>
+
+    <!-- GAME MENU -->
+    <section id="screen-menu" class="screen hidden">
+      <div class="topbar">
+        <span id="menu-names" class="names-chip"></span>
+        <span id="menu-room" class="room-chip"></span>
+      </div>
+      <h2 class="menu-title">Pick a game</h2>
+      <div class="game-list">
+        <button class="game-card" data-game="wyr">
+          <span class="game-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </span>
+          <span class="game-info">
+            <span class="game-name">Would You Rather</span>
+            <span class="game-desc">Answer secretly, reveal together. Do you match?</span>
+          </span>
+        </button>
+        <button class="game-card" data-game="tot">
+          <span class="game-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </span>
+          <span class="game-info">
+            <span class="game-name">This or That</span>
+            <span class="game-desc">Rapid-fire picks → your compatibility score</span>
+          </span>
+        </button>
+        <button class="game-card" data-game="wkm">
+          <span class="game-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </span>
+          <span class="game-info">
+            <span class="game-name">Who Knows Me Better?</span>
+            <span class="game-desc">Guess each other's answers, newlywed-game style</span>
+          </span>
+        </button>
+      </div>
+      <p id="partner-status" class="muted center-text hidden"></p>
+    </section>
+
+    <!-- PLAYING -->
+    <section id="screen-play" class="screen hidden">
+      <div class="topbar">
+        <button id="btn-quit" class="btn-link">← Menu</button>
+        <span id="play-progress" class="room-chip"></span>
+      </div>
+      <div class="card">
+        <p id="play-kicker" class="kicker"></p>
+        <h2 id="play-question"></h2>
+        <div id="play-options" class="options"></div>
+        <p id="play-status" class="muted center-text"></p>
+        <div id="reveal-box" class="reveal hidden">
+          <div id="reveal-verdict" class="verdict"></div>
+          <div id="reveal-answers" class="reveal-answers"></div>
+          <button id="btn-next" class="btn btn-primary">Next →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- RESULTS -->
+    <section id="screen-results" class="screen hidden">
+      <div class="card center">
+        <h2 id="results-title"></h2>
+        <div id="results-big" class="big-score"></div>
+        <p id="results-detail" class="muted"></p>
+        <button id="btn-again" class="btn btn-primary">Play again</button>
+        <button id="btn-menu" class="btn btn-secondary">Back to menu</button>
+      </div>
+    </section>
+
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
