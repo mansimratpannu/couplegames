@@ -45,20 +45,28 @@ function showError(msg) {
   el.classList.remove('hidden');
 }
 
-// Remember the session so a page reload (e.g. phone screen lock) can rejoin.
+// Remember the session so a page reload (phone screen lock, in-app browser
+// restart) can rejoin. localStorage, not sessionStorage: mobile in-app
+// browsers routinely recreate the tab, which wipes sessionStorage.
+const SESSION_TTL = 6 * 60 * 60 * 1000; // stop trying to rejoin after 6h
+
 function saveSession(code) {
   try {
-    sessionStorage.setItem('cg-session', JSON.stringify({ code, name: myName() }));
+    localStorage.setItem('cg-session', JSON.stringify({ code, name: myName(), at: Date.now() }));
     localStorage.setItem('cg-name', myName());
   } catch (e) { /* storage unavailable — rejoin just won't be automatic */ }
 }
 
 function savedSession() {
-  try { return JSON.parse(sessionStorage.getItem('cg-session')); } catch (e) { return null; }
+  try {
+    const s = JSON.parse(localStorage.getItem('cg-session'));
+    if (!s || !s.code || Date.now() - (s.at || 0) > SESSION_TTL) return null;
+    return s;
+  } catch (e) { return null; }
 }
 
 function clearSession() {
-  try { sessionStorage.removeItem('cg-session'); } catch (e) { /* ignore */ }
+  try { localStorage.removeItem('cg-session'); } catch (e) { /* ignore */ }
 }
 
 // The free-tier server can take ~30s to wake up; don't let buttons fail silently.
