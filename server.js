@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
-const { WYR, TOT, WKM } = require('./questions');
+const { WYR, TOT, WKM, TOD_TRUTHS, TOD_DARES, Q36 } = require('./questions');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,6 +21,9 @@ const GAME_CONFIG = {
   wyr: { count: 10 },
   tot: { count: 15 },
   wkm: { count: 10 }, // must be even so both partners are the subject equally
+  tod: { count: 10 },
+  q36: { count: Q36.length },
+  c4: { count: 0 },
 };
 
 function makeCode() {
@@ -50,9 +53,40 @@ function pickQuestions(type) {
   return shuffle(pool).slice(0, count).map(([a, b]) => ({ options: [a, b] }));
 }
 
-function newGame(type) {
+function newGame(type, starter = 0) {
+  const id = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  if (type === 'tod') {
+    return {
+      type,
+      id,
+      round: 0,
+      total: GAME_CONFIG.tod.count,
+      phase: 'choose', // 'choose' (actor picks truth/dare) | 'doing'
+      choice: null,
+      prompt: null,
+      truths: shuffle(TOD_TRUTHS),
+      dares: shuffle(TOD_DARES),
+      finished: false,
+    };
+  }
+  if (type === 'q36') {
+    return { type, id, qIndex: 0, total: Q36.length, ready: [false, false], finished: false };
+  }
+  if (type === 'c4') {
+    return {
+      type,
+      id,
+      board: Array.from({ length: 6 }, () => Array(7).fill(null)), // [row][col], row 0 = top
+      turn: starter,
+      starter,
+      winner: null,
+      winLine: null,
+      finished: false,
+    };
+  }
   return {
     type,
+    id,
     questions: pickQuestions(type),
     qIndex: 0,
     answers: [null, null],
@@ -63,28 +97,141 @@ function newGame(type) {
   };
 }
 
+// Returns the winning line of 4+ through (r, c), or null.
+function c4WinLine(board, r, c) {
+  const who = board[r][c];
+  for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+    const line = [[r, c]];
+    for (const s of [1, -1]) {
+      let rr = r + dr * s;
+      let cc = c + dc * s;
+      while (rr >= 0 && rr < 6 && cc >= 0 && cc < 7 && board[rr][cc] === who) {
+        line.push([rr, cc]);
+        rr += dr * s;
+        cc += dc * s;
+      }
+    }
+    if (line.length >= 4) return line;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Couple profile: anniversary + lifetime stats. The server room copy is a
+// relay/merge point — the durable copies live in each partner's localStorage,
+// so nothing is lost when this process restarts.
+// ---------------------------------------------------------------------------
+function emptyProfile() {
+  return {
+    anniversary: null,
+    anniversaryAt: 0,
+    played: {},
+    matches: 0,
+    questions: 0,
+    wkmWins: {},
+    wkmTies: 0,
+    c4Wins: {},
+    updatedAt: 0,
+  };
+}
+
+function mergeCounts(a = {}, b = {}) {
+  const out = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    out[String(k).slice(0, 20)] = Math.max(a[k] || 0, b[k] || 0);
+  }
+  return out;
+}
+
+function num(x) { return Number.isFinite(x) && x >= 0 ? Math.floor(x) : 0; }
+
+function mergeProfiles(a, b) {
+  if (!b || typeof b !== 'object') return a;
+  const out = { ...a };
+  if (typeof b.anniversary === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.anniversary)
+      && num(b.anniversaryAt) > a.anniversaryAt) {
+    out.anniversary = b.anniversary;
+    out.anniversaryAt = num(b.anniversaryAt);
+  }
+  out.played = mergeCounts(a.played, b.played);
+  out.matches = Math.max(a.matches, num(b.matches));
+  out.questions = Math.max(a.questions, num(b.questions));
+  out.wkmWins = mergeCounts(a.wkmWins, b.wkmWins);
+  out.wkmTies = Math.max(a.wkmTies, num(b.wkmTies));
+  out.c4Wins = mergeCounts(a.c4Wins, b.c4Wins);
+  out.updatedAt = Date.now();
+  return out;
+}
+
+// Record a finished game into the room profile and push it to both players.
+function recordFinish(room, g) {
+  const p = room.profile;
+  p.played[g.type] = (p.played[g.type] || 0) + 1;
+  if (g.type === 'wyr' || g.type === 'tot') {
+    p.matches += g.matches;
+    p.questions += g.questions.length;
+  }
+  if (g.type === 'wkm') {
+    const [s0, s1] = g.scores;
+    if (s0 === s1) {
+      p.wkmTies++;
+    } else {
+      const winner = room.players[s0 > s1 ? 0 : 1];
+      if (winner) p.wkmWins[winner.name] = (p.wkmWins[winner.name] || 0) + 1;
+    }
+  }
+  if (g.type === 'c4' && g.winner !== null) {
+    const winner = room.players[g.winner];
+    if (winner) p.c4Wins[winner.name] = (p.c4Wins[winner.name] || 0) + 1;
+  }
+  p.updatedAt = Date.now();
+  io.to(room.code).emit('profile', p);
+}
+
 // What each client is allowed to see. Answers stay hidden until reveal.
+function publicGame(g) {
+  if (!g) return null;
+  if (g.type === 'tod') {
+    return {
+      type: g.type, id: g.id, round: g.round, total: g.total, phase: g.phase,
+      choice: g.choice, prompt: g.prompt, actor: g.round % 2, finished: g.finished,
+    };
+  }
+  if (g.type === 'q36') {
+    return {
+      type: g.type, id: g.id, qIndex: g.qIndex, total: g.total,
+      question: g.finished ? null : Q36[g.qIndex],
+      ready: g.ready, finished: g.finished,
+    };
+  }
+  if (g.type === 'c4') {
+    return {
+      type: g.type, id: g.id, board: g.board, turn: g.turn, starter: g.starter,
+      winner: g.winner, winLine: g.winLine, finished: g.finished,
+    };
+  }
+  return {
+    type: g.type,
+    id: g.id,
+    qIndex: g.qIndex,
+    total: g.questions.length,
+    question: g.finished ? null : g.questions[g.qIndex],
+    answered: [g.answers[0] !== null, g.answers[1] !== null],
+    revealed: g.revealed,
+    answers: g.revealed ? g.answers : null,
+    matches: g.matches,
+    scores: g.scores,
+    subject: g.type === 'wkm' ? g.qIndex % 2 : null,
+    finished: g.finished,
+  };
+}
+
 function publicState(room) {
-  const g = room.game;
   return {
     code: room.code,
     phase: room.phase, // 'lobby' | 'menu' | 'playing'
     players: room.players.map((p) => (p ? { name: p.name, connected: p.connected } : null)),
-    game: g
-      ? {
-          type: g.type,
-          qIndex: g.qIndex,
-          total: g.questions.length,
-          question: g.finished ? null : g.questions[g.qIndex],
-          answered: [g.answers[0] !== null, g.answers[1] !== null],
-          revealed: g.revealed,
-          answers: g.revealed ? g.answers : null,
-          matches: g.matches,
-          scores: g.scores,
-          subject: g.type === 'wkm' ? g.qIndex % 2 : null,
-          finished: g.finished,
-        }
-      : null,
+    game: publicGame(room.game),
   };
 }
 
@@ -104,6 +251,7 @@ io.on('connection', (socket) => {
       phase: 'lobby',
       players: [{ id: socket.id, name, connected: true }, null],
       game: null,
+      profile: emptyProfile(),
       emptyTimer: null,
     };
     rooms.set(code, room);
@@ -177,7 +325,7 @@ io.on('connection', (socket) => {
   socket.on('answer', ({ choice }) => {
     const room = getRoom();
     const g = room && room.game;
-    if (!g || g.revealed || g.finished) return;
+    if (!g || !g.answers || g.revealed || g.finished) return;
     const idx = socket.data.idx;
     if (g.answers[idx] !== null) return;
     const q = g.questions[g.qIndex];
@@ -201,11 +349,92 @@ io.on('connection', (socket) => {
   socket.on('next', () => {
     const room = getRoom();
     const g = room && room.game;
-    if (!g || !g.revealed || g.finished) return;
+    if (!g || g.finished) return;
+
+    if (g.type === 'tod') {
+      if (g.phase !== 'doing') return;
+      g.round++;
+      g.phase = 'choose';
+      g.choice = null;
+      g.prompt = null;
+      if (g.round >= g.total) {
+        g.finished = true;
+        recordFinish(room, g);
+      }
+      broadcast(room);
+      return;
+    }
+
+    if (!g.revealed) return;
     g.qIndex++;
     g.answers = [null, null];
     g.revealed = false;
-    if (g.qIndex >= g.questions.length) g.finished = true;
+    if (g.qIndex >= g.questions.length) {
+      g.finished = true;
+      recordFinish(room, g);
+    }
+    broadcast(room);
+  });
+
+  // Truth or Dare: the actor picks truth or dare, the server draws a prompt.
+  socket.on('todChoose', ({ kind }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'tod' || g.finished || g.phase !== 'choose') return;
+    if (socket.data.idx !== g.round % 2) return;
+    if (kind !== 'truth' && kind !== 'dare') return;
+    const pool = kind === 'truth' ? g.truths : g.dares;
+    if (pool.length === 0) pool.push(...shuffle(kind === 'truth' ? TOD_TRUTHS : TOD_DARES));
+    g.choice = kind;
+    g.prompt = pool.pop();
+    g.phase = 'doing';
+    broadcast(room);
+  });
+
+  // 36 Questions: advance when both players say they've answered out loud.
+  socket.on('ready', () => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'q36' || g.finished) return;
+    g.ready[socket.data.idx] = true;
+    if (g.ready[0] && g.ready[1]) {
+      g.qIndex++;
+      g.ready = [false, false];
+      if (g.qIndex >= g.total) {
+        g.finished = true;
+        recordFinish(room, g);
+      }
+    }
+    broadcast(room);
+  });
+
+  // Connect Four: drop a disc in a column.
+  socket.on('c4move', ({ col }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'c4' || g.finished) return;
+    const idx = socket.data.idx;
+    if (idx !== g.turn) return;
+    if (!Number.isInteger(col) || col < 0 || col > 6) return;
+    let row = -1;
+    for (let r = 5; r >= 0; r--) {
+      if (g.board[r][col] === null) { row = r; break; }
+    }
+    if (row === -1) return; // column full
+
+    g.board[row][col] = idx;
+    const line = c4WinLine(g.board, row, col);
+    if (line) {
+      g.winner = idx;
+      g.winLine = line;
+      g.finished = true;
+      recordFinish(room, g);
+    } else if (g.board[0].every((_, c) => g.board[0][c] !== null)) {
+      g.finished = true; // draw
+      recordFinish(room, g);
+    } else {
+      g.turn = 1 - g.turn;
+    }
     broadcast(room);
   });
 
@@ -213,8 +442,31 @@ io.on('connection', (socket) => {
     const room = getRoom();
     const g = room && room.game;
     if (!g || !g.finished) return;
-    room.game = newGame(g.type);
+    // In Connect Four, alternate who starts each rematch.
+    room.game = newGame(g.type, g.type === 'c4' ? 1 - g.starter : 0);
     broadcast(room);
+  });
+
+  // Either partner sets the day they started dating; both devices store it.
+  socket.on('setAnniversary', ({ date }) => {
+    const room = getRoom();
+    if (!room) return;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const d = new Date(date + 'T00:00:00');
+    if (Number.isNaN(d.getTime()) || d.getTime() > Date.now()) return;
+    room.profile.anniversary = date;
+    room.profile.anniversaryAt = Date.now();
+    room.profile.updatedAt = Date.now();
+    io.to(room.code).emit('profile', room.profile);
+  });
+
+  // Clients share their locally saved profile after joining; the room keeps
+  // the merged view and pushes it back to both.
+  socket.on('shareProfile', ({ profile }) => {
+    const room = getRoom();
+    if (!room) return;
+    room.profile = mergeProfiles(room.profile, profile);
+    io.to(room.code).emit('profile', room.profile);
   });
 
   socket.on('backToMenu', () => {
