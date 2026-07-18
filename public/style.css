@@ -301,6 +301,45 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); box-shado
 .c4-cell.win { box-shadow: 0 0 0 3px var(--ink); transform: scale(1.05); }
 .c4-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 6px; }
 
+/* Tic-Tac-Toe (shares the board screen) */
+.c4-board.grid-ttt { grid-template-columns: repeat(3, 1fr); max-width: 280px; background: #fff7ed; border-color: #fed7aa; }
+.ttt-cell {
+  aspect-ratio: 1;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid #e4e4e7;
+  background: #fff;
+  font-size: 34px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s, transform 0.1s;
+}
+.ttt-cell:not(:disabled):hover { background: var(--accent-soft); }
+.ttt-cell:disabled { cursor: default; }
+.ttt-cell.p0 { color: var(--accent); }
+.ttt-cell.p1 { color: #d97706; }
+.ttt-cell.win { box-shadow: 0 0 0 3px var(--ink); transform: scale(1.05); }
+
+/* Memory Match (shares the board screen) */
+.c4-board.grid-mem { grid-template-columns: repeat(4, 1fr); max-width: 320px; background: #f0fdf4; border-color: #bbf7d0; }
+.mem-card {
+  aspect-ratio: 1;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #d4d4d8;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  font-size: 24px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.12s, opacity 0.2s;
+}
+.mem-card:not(:disabled):hover { transform: scale(1.05); }
+.mem-card:disabled { cursor: default; }
+.mem-card.face-up { background: #fff; }
+.mem-card.matched { opacity: 0.35; }
+
 /* Toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);

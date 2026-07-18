@@ -37,7 +37,20 @@ const GAME_NAMES = {
   tod: 'Truth or Dare',
   q36: '36 Questions',
   c4: 'Connect Four',
+  ttt: 'Tic-Tac-Toe',
+  mem: 'Memory Match',
+  rps: 'Rock Paper Scissors',
 };
+
+const BOARD_GAMES = ['c4', 'ttt', 'mem'];
+const RPS_MOVES = ['Rock', 'Paper', 'Scissors'];
+const MEM_TOKENS = [
+  { ch: 'A', color: '#e11d48' }, { ch: 'B', color: '#2563eb' },
+  { ch: 'C', color: '#059669' }, { ch: 'D', color: '#d97706' },
+  { ch: 'E', color: '#7c3aed' }, { ch: 'F', color: '#0891b2' },
+  { ch: 'G', color: '#db2777' }, { ch: 'H', color: '#65a30d' },
+  { ch: 'J', color: '#dc2626' }, { ch: 'K', color: '#4f46e5' },
+];
 
 // ---------------------------------------------------------------------------
 // Couple profile (anniversary + lifetime stats), mirrored in localStorage
@@ -303,14 +316,15 @@ function render() {
   showingUs = false;
   const g = state.game;
   if (!g) return show('menu');
-  if (g.type === 'c4') {
-    // Even when finished, keep the winning board on screen.
-    renderC4(g);
+  if (BOARD_GAMES.includes(g.type)) {
+    // Even when finished, keep the final board on screen.
+    renderBoard(g);
     return show('c4');
   }
   if (g.finished) return renderResults(g);
   if (g.type === 'tod') renderTod(g);
   else if (g.type === 'q36') renderQ36(g);
+  else if (g.type === 'rps') renderRps(g);
   else renderQuestion(g);
   show('play');
 }
@@ -386,9 +400,17 @@ function renderUs() {
     const tally = wkmNames.map((n) => `${n} ${p.wkmWins[n]}`).join(' · ') || '—';
     box.appendChild(statRow('Who Knows Me Better wins', tally + (p.wkmTies ? ` · ${p.wkmTies} tied` : '')));
   }
-  const c4Names = Object.keys(p.c4Wins || {});
-  if (c4Names.length) {
-    box.appendChild(statRow('Connect Four wins', c4Names.map((n) => `${n} ${p.c4Wins[n]}`).join(' · ')));
+  const winMaps = [
+    ['Connect Four wins', p.c4Wins],
+    ['Tic-Tac-Toe wins', p.tttWins],
+    ['Memory Match wins', p.memWins],
+    ['Rock Paper Scissors wins', p.rpsWins],
+  ];
+  for (const [label, map] of winMaps) {
+    const names = Object.keys(map || {});
+    if (names.length) {
+      box.appendChild(statRow(label, names.map((n) => `${n} ${map[n]}`).join(' · ')));
+    }
   }
   for (const [type, name] of Object.entries(GAME_NAMES)) {
     if (played[type]) box.appendChild(statRow(name, `played ${played[type]}×`));
@@ -453,38 +475,137 @@ function renderQ36(g) {
 }
 
 // ---------------------------------------------------------------------------
-// Connect Four
+// Board games (Connect Four, Tic-Tac-Toe, Memory Match) share one screen
 // ---------------------------------------------------------------------------
-function renderC4(g) {
+function renderBoard(g) {
+  $('c4-chip').textContent = GAME_NAMES[g.type];
   const myTurn = g.turn === myIdx && !g.finished;
+
   if (g.finished) {
-    $('c4-status').textContent = g.winner === null
+    $('c4-status').textContent = g.winner === null || g.winner === undefined
       ? "It's a draw!"
       : (g.winner === myIdx ? 'You win!' : `${nameOf(g.winner)} wins!`);
-    if (g.winner === myIdx) celebrateOnce('c4-' + g.id);
+    if (g.winner === myIdx) celebrateOnce('board-' + g.id);
+  } else if (g.type === 'mem' && g.lock) {
+    $('c4-status').textContent = 'No match…';
   } else {
-    $('c4-status').textContent = myTurn ? 'Your move' : `${nameOf(g.turn)} is thinking…`;
+    $('c4-status').textContent = myTurn
+      ? (g.type === 'mem' ? 'Your turn — flip two cards' : 'Your move')
+      : `${nameOf(g.turn)} is thinking…`;
   }
-  $('c4-legend').textContent = `${nameOf(0)} plays rose · ${nameOf(1)} plays gold`;
 
   const board = $('c4-board');
   board.innerHTML = '';
-  const winSet = new Set((g.winLine || []).map(([r, c]) => r + ',' + c));
-  for (let r = 0; r < 6; r++) {
-    for (let c = 0; c < 7; c++) {
+  board.className = 'c4-board grid-' + g.type;
+
+  if (g.type === 'c4') {
+    $('c4-legend').textContent = `${nameOf(0)} plays rose · ${nameOf(1)} plays gold`;
+    const winSet = new Set((g.winLine || []).map(([r, c]) => r + ',' + c));
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 7; c++) {
+        const cell = document.createElement('button');
+        cell.className = 'c4-cell';
+        const v = g.board[r][c];
+        if (v !== null) cell.classList.add(v === 0 ? 'p0' : 'p1');
+        if (winSet.has(r + ',' + c)) cell.classList.add('win');
+        cell.disabled = !myTurn || g.board[0][c] !== null;
+        cell.addEventListener('click', () => socket.emit('c4move', { col: c }));
+        board.appendChild(cell);
+      }
+    }
+  } else if (g.type === 'ttt') {
+    $('c4-legend').textContent = `${nameOf(0)} is X · ${nameOf(1)} is O`;
+    const winSet = new Set(g.winLine || []);
+    for (let i = 0; i < 9; i++) {
       const cell = document.createElement('button');
-      cell.className = 'c4-cell';
-      const v = g.board[r][c];
-      if (v !== null) cell.classList.add(v === 0 ? 'p0' : 'p1');
-      if (winSet.has(r + ',' + c)) cell.classList.add('win');
-      cell.disabled = !myTurn || g.board[0][c] !== null;
-      cell.addEventListener('click', () => socket.emit('c4move', { col: c }));
+      cell.className = 'ttt-cell';
+      const v = g.board[i];
+      if (v !== null) {
+        cell.textContent = v === 0 ? 'X' : 'O';
+        cell.classList.add(v === 0 ? 'p0' : 'p1');
+      }
+      if (winSet.has(i)) cell.classList.add('win');
+      cell.disabled = !myTurn || v !== null;
+      cell.addEventListener('click', () => socket.emit('tttMove', { cell: i }));
+      board.appendChild(cell);
+    }
+  } else if (g.type === 'mem') {
+    $('c4-legend').textContent = `Pairs — ${nameOf(0)} ${g.scores[0]} · ${nameOf(1)} ${g.scores[1]}`;
+    for (let i = 0; i < g.cards.length; i++) {
+      const cell = document.createElement('button');
+      cell.className = 'mem-card';
+      const token = g.cards[i];
+      if (token !== null) {
+        const t = MEM_TOKENS[token];
+        cell.textContent = t.ch;
+        cell.style.color = t.color;
+        cell.classList.add('face-up');
+        if (g.matched[i]) cell.classList.add('matched');
+      }
+      cell.disabled = !myTurn || g.lock || token !== null;
+      cell.addEventListener('click', () => socket.emit('memFlip', { idx: i }));
       board.appendChild(cell);
     }
   }
 
-  const actions = $('c4-actions');
-  actions.classList.toggle('hidden', !g.finished);
+  $('c4-actions').classList.toggle('hidden', !g.finished);
+}
+
+// ---------------------------------------------------------------------------
+// Rock Paper Scissors (reuses the play screen)
+// ---------------------------------------------------------------------------
+function renderRps(g) {
+  $('play-progress').textContent = `${GAME_NAMES.rps} · first to ${g.target}`;
+  $('play-kicker').textContent = `Round ${g.round}`;
+  $('play-question').textContent = `${nameOf(0)} ${g.scores[0]} – ${g.scores[1]} ${nameOf(1)}`;
+
+  const iAnswered = g.answered[myIdx];
+  const partnerAnswered = g.answered[1 - myIdx];
+  const box = $('play-options');
+  box.innerHTML = '';
+  RPS_MOVES.forEach((move, i) => {
+    const b = document.createElement('button');
+    b.className = 'option';
+    b.textContent = move;
+    b.disabled = iAnswered || g.revealed;
+    if (g.revealed && g.answers[myIdx] === i) b.classList.add('picked');
+    b.addEventListener('click', () => socket.emit('answer', { choice: i }));
+    box.appendChild(b);
+  });
+
+  const status = $('play-status');
+  if (g.revealed) {
+    status.textContent = '';
+  } else if (iAnswered && !partnerAnswered) {
+    status.textContent = `Locked in — waiting for ${nameOf(1 - myIdx)}…`;
+  } else if (!iAnswered && partnerAnswered) {
+    status.textContent = `${nameOf(1 - myIdx)} has thrown — your turn!`;
+  } else {
+    status.textContent = 'Pick your throw in secret.';
+  }
+
+  const revealBox = $('reveal-box');
+  if (g.revealed) {
+    revealBox.classList.remove('hidden');
+    const verdict = $('reveal-verdict');
+    const rows = $('reveal-answers');
+    rows.innerHTML = '';
+    const [a, b] = g.answers;
+    if (a === b) {
+      verdict.textContent = 'Tie — go again!';
+      verdict.className = 'verdict differ';
+    } else {
+      const w = (a - b + 3) % 3 === 1 ? 0 : 1;
+      verdict.textContent = `${RPS_MOVES[g.answers[w]]} beats ${RPS_MOVES[g.answers[1 - w]]} — ${nameOf(w)} takes the round!`;
+      verdict.className = 'verdict ' + (w === myIdx ? 'match' : 'differ');
+      if (w === myIdx) celebrateOnce(`rev-${g.id}-${g.round}`);
+    }
+    rows.appendChild(revealRow(nameOf(0), RPS_MOVES[a]));
+    rows.appendChild(revealRow(nameOf(1), RPS_MOVES[b]));
+    $('btn-next').textContent = 'Next round →';
+  } else {
+    revealBox.classList.add('hidden');
+  }
 }
 
 function nameOf(idx) {
@@ -598,6 +719,16 @@ function renderResults(g) {
   const big = $('results-big');
   const detail = $('results-detail');
 
+  if (g.type === 'rps') {
+    title.textContent = 'Rock Paper Scissors';
+    big.textContent = `${g.scores[0]} – ${g.scores[1]}`;
+    const finalMove = g.answers
+      ? ` (${RPS_MOVES[g.answers[g.winner]]} beats ${RPS_MOVES[g.answers[1 - g.winner]]})`
+      : '';
+    detail.textContent = `${nameOf(g.winner)} wins the match${finalMove}!`;
+    if (g.winner === myIdx) celebrateOnce('res-' + g.id);
+    return show('results');
+  }
   if (g.type === 'tod') {
     title.textContent = 'Truth or Dare';
     big.textContent = `${g.total}/${g.total}`;

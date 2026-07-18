@@ -24,7 +24,18 @@ const GAME_CONFIG = {
   tod: { count: 10 },
   q36: { count: Q36.length },
   c4: { count: 0 },
+  ttt: { count: 0 },
+  mem: { count: 0 },
+  rps: { count: 0 },
 };
+
+const TTT_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6],
+];
+
+const MEM_PAIRS = 10; // 20 cards
 
 function makeCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I/O to avoid confusion
@@ -84,6 +95,49 @@ function newGame(type, starter = 0) {
       finished: false,
     };
   }
+  if (type === 'ttt') {
+    return {
+      type,
+      id,
+      board: Array(9).fill(null),
+      turn: starter,
+      starter,
+      winner: null,
+      winLine: null,
+      finished: false,
+    };
+  }
+  if (type === 'mem') {
+    const tokens = shuffle(
+      Array.from({ length: MEM_PAIRS }, (_, i) => [i, i]).flat()
+    );
+    return {
+      type,
+      id,
+      tokens,               // token index per card, hidden from clients
+      matched: Array(tokens.length).fill(false),
+      faceUp: [],           // indices currently flipped this turn (max 2)
+      lock: false,          // true while a failed pair is shown before hiding
+      turn: starter,
+      starter,
+      scores: [0, 0],
+      winner: null,
+      finished: false,
+    };
+  }
+  if (type === 'rps') {
+    return {
+      type,
+      id,
+      target: 3,            // first to 3 round wins
+      round: 1,
+      scores: [0, 0],
+      answers: [null, null],
+      revealed: false,
+      winner: null,
+      finished: false,
+    };
+  }
   return {
     type,
     id,
@@ -131,6 +185,9 @@ function emptyProfile() {
     wkmWins: {},
     wkmTies: 0,
     c4Wins: {},
+    tttWins: {},
+    memWins: {},
+    rpsWins: {},
     updatedAt: 0,
   };
 }
@@ -159,6 +216,9 @@ function mergeProfiles(a, b) {
   out.wkmWins = mergeCounts(a.wkmWins, b.wkmWins);
   out.wkmTies = Math.max(a.wkmTies, num(b.wkmTies));
   out.c4Wins = mergeCounts(a.c4Wins, b.c4Wins);
+  out.tttWins = mergeCounts(a.tttWins, b.tttWins);
+  out.memWins = mergeCounts(a.memWins, b.memWins);
+  out.rpsWins = mergeCounts(a.rpsWins, b.rpsWins);
   out.updatedAt = Date.now();
   return out;
 }
@@ -180,9 +240,13 @@ function recordFinish(room, g) {
       if (winner) p.wkmWins[winner.name] = (p.wkmWins[winner.name] || 0) + 1;
     }
   }
-  if (g.type === 'c4' && g.winner !== null) {
+  const winMaps = { c4: 'c4Wins', ttt: 'tttWins', mem: 'memWins', rps: 'rpsWins' };
+  if (winMaps[g.type] && g.winner !== null && g.winner !== undefined) {
     const winner = room.players[g.winner];
-    if (winner) p.c4Wins[winner.name] = (p.c4Wins[winner.name] || 0) + 1;
+    if (winner) {
+      const map = p[winMaps[g.type]] = p[winMaps[g.type]] || {};
+      map[winner.name] = (map[winner.name] || 0) + 1;
+    }
   }
   p.updatedAt = Date.now();
   io.to(room.code).emit('profile', p);
@@ -204,10 +268,29 @@ function publicGame(g) {
       ready: g.ready, finished: g.finished,
     };
   }
-  if (g.type === 'c4') {
+  if (g.type === 'c4' || g.type === 'ttt') {
     return {
       type: g.type, id: g.id, board: g.board, turn: g.turn, starter: g.starter,
       winner: g.winner, winLine: g.winLine, finished: g.finished,
+    };
+  }
+  if (g.type === 'mem') {
+    return {
+      type: g.type, id: g.id,
+      // Only matched or currently-flipped cards reveal their token.
+      cards: g.tokens.map((t, i) => (g.matched[i] || g.faceUp.includes(i) ? t : null)),
+      matched: g.matched, faceUp: g.faceUp, lock: g.lock,
+      turn: g.turn, starter: g.starter, scores: g.scores,
+      winner: g.winner, finished: g.finished,
+    };
+  }
+  if (g.type === 'rps') {
+    return {
+      type: g.type, id: g.id, round: g.round, target: g.target, scores: g.scores,
+      answered: [g.answers[0] !== null, g.answers[1] !== null],
+      revealed: g.revealed,
+      answers: g.revealed ? g.answers : null,
+      winner: g.winner, finished: g.finished,
     };
   }
   return {
@@ -328,6 +411,27 @@ io.on('connection', (socket) => {
     if (!g || !g.answers || g.revealed || g.finished) return;
     const idx = socket.data.idx;
     if (g.answers[idx] !== null) return;
+
+    if (g.type === 'rps') {
+      if (!Number.isInteger(choice) || choice < 0 || choice > 2) return; // rock/paper/scissors
+      g.answers[idx] = choice;
+      if (g.answers[0] !== null && g.answers[1] !== null) {
+        g.revealed = true;
+        const [a, b] = g.answers;
+        if (a !== b) {
+          const roundWinner = (a - b + 3) % 3 === 1 ? 0 : 1;
+          g.scores[roundWinner]++;
+          if (g.scores[roundWinner] >= g.target) {
+            g.winner = roundWinner;
+            g.finished = true;
+            recordFinish(room, g);
+          }
+        }
+      }
+      broadcast(room);
+      return;
+    }
+
     const q = g.questions[g.qIndex];
     const optionCount = q.options.length;
     if (!Number.isInteger(choice) || choice < 0 || choice >= optionCount) return;
@@ -365,6 +469,15 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (g.type === 'rps') {
+      if (!g.revealed) return;
+      g.round++;
+      g.answers = [null, null];
+      g.revealed = false;
+      broadcast(room);
+      return;
+    }
+
     if (!g.revealed) return;
     g.qIndex++;
     g.answers = [null, null];
@@ -372,6 +485,72 @@ io.on('connection', (socket) => {
     if (g.qIndex >= g.questions.length) {
       g.finished = true;
       recordFinish(room, g);
+    }
+    broadcast(room);
+  });
+
+  // Tic-Tac-Toe: claim a cell.
+  socket.on('tttMove', ({ cell }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'ttt' || g.finished) return;
+    const idx = socket.data.idx;
+    if (idx !== g.turn) return;
+    if (!Number.isInteger(cell) || cell < 0 || cell > 8 || g.board[cell] !== null) return;
+
+    g.board[cell] = idx;
+    const line = TTT_LINES.find((l) => l.every((c) => g.board[c] === idx));
+    if (line) {
+      g.winner = idx;
+      g.winLine = line;
+      g.finished = true;
+      recordFinish(room, g);
+    } else if (g.board.every((c) => c !== null)) {
+      g.finished = true; // draw
+      recordFinish(room, g);
+    } else {
+      g.turn = 1 - g.turn;
+    }
+    broadcast(room);
+  });
+
+  // Memory Match: flip a card. Match = go again; miss = shown briefly, then
+  // the turn passes.
+  socket.on('memFlip', ({ idx: cardIdx }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'mem' || g.finished || g.lock) return;
+    const idx = socket.data.idx;
+    if (idx !== g.turn) return;
+    if (!Number.isInteger(cardIdx) || cardIdx < 0 || cardIdx >= g.tokens.length) return;
+    if (g.matched[cardIdx] || g.faceUp.includes(cardIdx)) return;
+
+    g.faceUp.push(cardIdx);
+    if (g.faceUp.length === 2) {
+      const [a, b] = g.faceUp;
+      if (g.tokens[a] === g.tokens[b]) {
+        g.matched[a] = true;
+        g.matched[b] = true;
+        g.scores[idx]++;
+        g.faceUp = [];
+        if (g.matched.every(Boolean)) {
+          g.winner = g.scores[0] === g.scores[1] ? null : (g.scores[0] > g.scores[1] ? 0 : 1);
+          g.finished = true;
+          recordFinish(room, g);
+        }
+      } else {
+        g.lock = true;
+        const gameId = g.id;
+        setTimeout(() => {
+          const r = rooms.get(room.code);
+          const cur = r && r.game;
+          if (!cur || cur.id !== gameId || !cur.lock) return;
+          cur.faceUp = [];
+          cur.lock = false;
+          cur.turn = 1 - cur.turn;
+          broadcast(r);
+        }, 1400);
+      }
     }
     broadcast(room);
   });
@@ -442,8 +621,9 @@ io.on('connection', (socket) => {
     const room = getRoom();
     const g = room && room.game;
     if (!g || !g.finished) return;
-    // In Connect Four, alternate who starts each rematch.
-    room.game = newGame(g.type, g.type === 'c4' ? 1 - g.starter : 0);
+    // In board games, alternate who starts each rematch.
+    const alternates = ['c4', 'ttt', 'mem'];
+    room.game = newGame(g.type, alternates.includes(g.type) ? 1 - g.starter : 0);
     broadcast(room);
   });
 
