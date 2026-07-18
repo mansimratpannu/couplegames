@@ -113,18 +113,36 @@ io.on('connection', (socket) => {
     cb({ ok: true, code, idx: 0, state: publicState(room) });
   });
 
-  socket.on('joinRoom', ({ code, name }, cb) => {
+  socket.on('joinRoom', ({ code, name, rejoin }, cb) => {
     code = String(code || '').trim().toUpperCase();
     name = String(name || '').trim().slice(0, 20) || 'Player 2';
     const room = rooms.get(code);
     if (!room) return cb({ ok: false, error: "Couldn't find that room code." });
 
-    // Prefer reclaiming your own seat after a refresh (matched by name),
-    // then an empty partner seat, then any disconnected seat.
-    let idx = room.players.findIndex((p) => p && !p.connected && p.name === name);
-    if (idx === -1 && room.players[1] === null) idx = 1;
-    if (idx === -1) idx = room.players.findIndex((p) => p && !p.connected);
-    if (idx === -1) return cb({ ok: false, error: 'That room is already full.' });
+    let idx = -1;
+    if (rejoin) {
+      // Automatic rejoin may ONLY resume this player's own seat (matched by
+      // name) — never grab the partner's empty seat as a duplicate. If the
+      // seat still has a live socket (an older tab), boot it: newest tab wins.
+      idx = room.players.findIndex((p) => p && p.name === name);
+      if (idx === -1) return cb({ ok: false, error: 'Your seat is gone.' });
+      const old = room.players[idx];
+      if (old.connected && old.id !== socket.id) {
+        const oldSock = io.sockets.sockets.get(old.id);
+        if (oldSock) {
+          oldSock.emit('replaced');
+          oldSock.disconnect(true);
+        }
+      }
+    } else {
+      // Manual join: reclaim your own disconnected seat first (refresh after
+      // typing the code again), then the empty partner seat, then any
+      // disconnected seat.
+      idx = room.players.findIndex((p) => p && !p.connected && p.name === name);
+      if (idx === -1 && room.players[1] === null) idx = 1;
+      if (idx === -1) idx = room.players.findIndex((p) => p && !p.connected);
+      if (idx === -1) return cb({ ok: false, error: 'That room is already full.' });
+    }
 
     room.players[idx] = { id: socket.id, name, connected: true };
     if (room.phase === 'lobby' && room.players[1] !== null) room.phase = 'menu';

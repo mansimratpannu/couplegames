@@ -141,7 +141,22 @@ socket.on('state', (s) => {
   render();
 });
 
-socket.on('disconnect', () => toast('Connection lost — trying to reconnect…', 4000));
+// A newer tab took over our seat — stand down instead of fighting it for
+// the seat in a reconnect loop.
+socket.on('replaced', () => {
+  clearSession();
+  state = null;
+  myIdx = null;
+  render();
+  toast('This room was opened in a newer tab.', 4000);
+});
+
+socket.on('disconnect', (reason) => {
+  // A server-initiated disconnect (seat takeover) stops auto-reconnect;
+  // reconnect manually so the home screen still works afterwards.
+  if (reason === 'io server disconnect') socket.connect();
+  if (state) toast('Connection lost — trying to reconnect…', 4000);
+});
 socket.on('connect', () => {
   // Rejoin after a reconnect (stale seat) or a fresh page load (saved session,
   // e.g. the phone reloaded the tab after a screen lock).
@@ -155,7 +170,7 @@ socket.on('connect', () => {
   if (!target) return;
 
   const wasInRoom = state !== null;
-  socket.emit('joinRoom', { code: target.code, name: target.name }, (res) => {
+  socket.emit('joinRoom', { code: target.code, name: target.name, rejoin: true }, (res) => {
     if (res.ok) {
       myIdx = res.idx;
       state = res.state;
