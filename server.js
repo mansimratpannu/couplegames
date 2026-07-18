@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
-const { WYR, TOT, WKM, TOD_TRUTHS, TOD_DARES, Q36 } = require('./questions');
+const { WYR, TOT, WKM, TOD_TRUTHS, TOD_DARES, Q36, DRAW_WORDS } = require('./questions');
 
 const app = express();
 const server = http.createServer(app);
@@ -27,7 +27,40 @@ const GAME_CONFIG = {
   ttt: { count: 0 },
   mem: { count: 0 },
   rps: { count: 0 },
+  bs: { count: 0 },
+  draw: { count: 0 },
 };
+
+// Battleship: 8x8 board, fleet of lengths 4/3/3/2. Cells are r*8+c.
+const BS_SIZE = 8;
+const BS_FLEET = [4, 3, 3, 2];
+
+function bsRandomFleet() {
+  const taken = new Set();
+  const ships = [];
+  for (const len of BS_FLEET) {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const horizontal = Math.random() < 0.5;
+      const r = Math.floor(Math.random() * (horizontal ? BS_SIZE : BS_SIZE - len + 1));
+      const c = Math.floor(Math.random() * (horizontal ? BS_SIZE - len + 1 : BS_SIZE));
+      const cells = Array.from({ length: len }, (_, i) =>
+        horizontal ? r * BS_SIZE + c + i : (r + i) * BS_SIZE + c);
+      if (cells.every((cell) => !taken.has(cell))) {
+        cells.forEach((cell) => taken.add(cell));
+        ships.push(cells);
+        break;
+      }
+    }
+  }
+  return ships;
+}
+
+const DRAW_ROUNDS = 6;
+const DRAW_TIME_MS = 90 * 1000;
+
+function drawOptions() {
+  return shuffle(DRAW_WORDS).slice(0, 3);
+}
 
 const TTT_LINES = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -138,6 +171,38 @@ function newGame(type, starter = 0) {
       finished: false,
     };
   }
+  if (type === 'bs') {
+    return {
+      type,
+      id,
+      phase: 'place',            // 'place' | 'battle'
+      ships: [bsRandomFleet(), bsRandomFleet()], // secret — sent privately
+      ready: [false, false],
+      shots: [{}, {}],           // shots[i] = cells player i fired at, cell -> 'hit'|'miss'
+      turn: starter,
+      starter,
+      winner: null,
+      finished: false,
+    };
+  }
+  if (type === 'draw') {
+    return {
+      type,
+      id,
+      round: 0,
+      total: DRAW_ROUNDS,
+      phase: 'pick',             // 'pick' | 'draw' | 'reveal'
+      options: drawOptions(),    // secret — sent privately to the drawer
+      word: null,
+      deadline: null,
+      strokes: [],
+      score: 0,                  // team score: rounds guessed
+      lastResult: null,          // 'guessed' | 'timeout' | 'skipped'
+      lastWord: null,
+      timer: null,
+      finished: false,
+    };
+  }
   return {
     type,
     id,
@@ -188,6 +253,8 @@ function emptyProfile() {
     tttWins: {},
     memWins: {},
     rpsWins: {},
+    bsWins: {},
+    drawBest: 0,
     updatedAt: 0,
   };
 }
@@ -219,6 +286,8 @@ function mergeProfiles(a, b) {
   out.tttWins = mergeCounts(a.tttWins, b.tttWins);
   out.memWins = mergeCounts(a.memWins, b.memWins);
   out.rpsWins = mergeCounts(a.rpsWins, b.rpsWins);
+  out.bsWins = mergeCounts(a.bsWins, b.bsWins);
+  out.drawBest = Math.max(num(a.drawBest), num(b.drawBest));
   out.updatedAt = Date.now();
   return out;
 }
@@ -240,7 +309,10 @@ function recordFinish(room, g) {
       if (winner) p.wkmWins[winner.name] = (p.wkmWins[winner.name] || 0) + 1;
     }
   }
-  const winMaps = { c4: 'c4Wins', ttt: 'tttWins', mem: 'memWins', rps: 'rpsWins' };
+  if (g.type === 'draw') {
+    p.drawBest = Math.max(p.drawBest || 0, g.score);
+  }
+  const winMaps = { c4: 'c4Wins', ttt: 'tttWins', mem: 'memWins', rps: 'rpsWins', bs: 'bsWins' };
   if (winMaps[g.type] && g.winner !== null && g.winner !== undefined) {
     const winner = room.players[g.winner];
     if (winner) {
@@ -293,6 +365,26 @@ function publicGame(g) {
       winner: g.winner, finished: g.finished,
     };
   }
+  if (g.type === 'bs') {
+    return {
+      type: g.type, id: g.id, phase: g.phase, ready: g.ready,
+      turn: g.turn, starter: g.starter, shots: g.shots,
+      // A player's ships are revealed to the opponent only once sunk.
+      sunk: g.ships.map((fleet, pi) =>
+        fleet.filter((ship) => ship.every((c) => g.shots[1 - pi][c] === 'hit'))),
+      winner: g.winner, finished: g.finished,
+    };
+  }
+  if (g.type === 'draw') {
+    return {
+      type: g.type, id: g.id, round: g.round, total: g.total, phase: g.phase,
+      drawer: g.round % 2,
+      wordLen: g.word ? g.word.length : null,
+      deadline: g.deadline, score: g.score,
+      lastResult: g.lastResult, lastWord: g.phase === 'reveal' || g.finished ? g.lastWord : null,
+      finished: g.finished,
+    };
+  }
   return {
     type: g.type,
     id: g.id,
@@ -320,6 +412,30 @@ function publicState(room) {
 
 function broadcast(room) {
   io.to(room.code).emit('state', publicState(room));
+}
+
+// Send secret per-player data (own ships, drawer's word) to one seat only.
+function privateEmit(room, idx, ev, payload) {
+  const p = room.players[idx];
+  if (!p || !p.connected) return;
+  const s = io.sockets.sockets.get(p.id);
+  if (s) s.emit(ev, payload);
+}
+
+// Re-send whatever secret state a (re)joining player needs to resume.
+function syncPrivate(room, idx) {
+  const g = room.game;
+  if (!g) return;
+  if (g.type === 'bs') {
+    privateEmit(room, idx, 'bsLayout', { gameId: g.id, ships: g.ships[idx] });
+  }
+  if (g.type === 'draw') {
+    privateEmit(room, idx, 'drawStrokes', { gameId: g.id, strokes: g.strokes });
+    if (g.round % 2 === idx) {
+      if (g.phase === 'pick') privateEmit(room, idx, 'drawOptions', { gameId: g.id, options: g.options });
+      if (g.phase === 'draw') privateEmit(room, idx, 'drawWord', { gameId: g.id, word: g.word });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +503,7 @@ io.on('connection', (socket) => {
     socket.data.idx = idx;
     cb({ ok: true, code, idx, state: publicState(room) });
     broadcast(room);
+    syncPrivate(room, idx);
   });
 
   function getRoom() {
@@ -400,9 +517,12 @@ io.on('connection', (socket) => {
   socket.on('selectGame', ({ type }) => {
     const room = getRoom();
     if (!room || room.phase === 'lobby' || !GAME_CONFIG[type]) return;
+    if (room.game && room.game.timer) clearTimeout(room.game.timer);
     room.game = newGame(type);
     room.phase = 'playing';
     broadcast(room);
+    syncPrivate(room, 0);
+    syncPrivate(room, 1);
   });
 
   socket.on('answer', ({ choice }) => {
@@ -474,6 +594,25 @@ io.on('connection', (socket) => {
       g.round++;
       g.answers = [null, null];
       g.revealed = false;
+      broadcast(room);
+      return;
+    }
+
+    if (g.type === 'draw') {
+      if (g.phase !== 'reveal') return;
+      g.round++;
+      if (g.round >= g.total) {
+        g.finished = true;
+        recordFinish(room, g);
+      } else {
+        g.phase = 'pick';
+        g.options = drawOptions();
+        g.word = null;
+        g.strokes = [];
+        g.deadline = null;
+        io.to(room.code).emit('clearCanvas');
+        privateEmit(room, g.round % 2, 'drawOptions', { gameId: g.id, options: g.options });
+      }
       broadcast(room);
       return;
     }
@@ -617,14 +756,147 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  // ---- Battleship ----
+  socket.on('bsShuffle', () => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'bs' || g.phase !== 'place') return;
+    const idx = socket.data.idx;
+    if (g.ready[idx]) return;
+    g.ships[idx] = bsRandomFleet();
+    privateEmit(room, idx, 'bsLayout', { gameId: g.id, ships: g.ships[idx] });
+  });
+
+  socket.on('bsReady', () => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'bs' || g.phase !== 'place') return;
+    g.ready[socket.data.idx] = true;
+    if (g.ready[0] && g.ready[1]) g.phase = 'battle';
+    broadcast(room);
+  });
+
+  socket.on('bsFire', ({ cell }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'bs' || g.phase !== 'battle' || g.finished) return;
+    const idx = socket.data.idx;
+    if (idx !== g.turn) return;
+    if (!Number.isInteger(cell) || cell < 0 || cell >= BS_SIZE * BS_SIZE) return;
+    if (g.shots[idx][cell]) return;
+
+    const enemyShips = g.ships[1 - idx];
+    const hit = enemyShips.some((ship) => ship.includes(cell));
+    g.shots[idx][cell] = hit ? 'hit' : 'miss';
+    if (hit) {
+      // Hit = shoot again; sink everything to win.
+      if (enemyShips.every((ship) => ship.every((c) => g.shots[idx][c] === 'hit'))) {
+        g.winner = idx;
+        g.finished = true;
+        recordFinish(room, g);
+      }
+    } else {
+      g.turn = 1 - g.turn;
+    }
+    broadcast(room);
+  });
+
+  // ---- Drawing & Guessing ----
+  socket.on('drawPick', ({ i }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'draw' || g.phase !== 'pick' || g.finished) return;
+    const idx = socket.data.idx;
+    if (idx !== g.round % 2) return;
+    if (!Number.isInteger(i) || i < 0 || i >= g.options.length) return;
+
+    g.word = g.options[i];
+    g.phase = 'draw';
+    g.strokes = [];
+    g.deadline = Date.now() + DRAW_TIME_MS;
+    privateEmit(room, idx, 'drawWord', { gameId: g.id, word: g.word });
+    const gameId = g.id;
+    const roundAt = g.round;
+    g.timer = setTimeout(() => {
+      const r = rooms.get(room.code);
+      const cur = r && r.game;
+      if (!cur || cur.id !== gameId || cur.round !== roundAt || cur.phase !== 'draw') return;
+      cur.phase = 'reveal';
+      cur.lastResult = 'timeout';
+      cur.lastWord = cur.word;
+      broadcast(r);
+    }, DRAW_TIME_MS + 500);
+    broadcast(room);
+  });
+
+  socket.on('drawSeg', (seg) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'draw' || g.phase !== 'draw') return;
+    const idx = socket.data.idx;
+    if (idx !== g.round % 2) return;
+    if (!seg || typeof seg !== 'object') return;
+    const clean = {
+      x0: +seg.x0, y0: +seg.y0, x1: +seg.x1, y1: +seg.y1,
+      c: typeof seg.c === 'string' ? seg.c.slice(0, 12) : '#18181b',
+    };
+    if (![clean.x0, clean.y0, clean.x1, clean.y1].every((n) => Number.isFinite(n) && n >= 0 && n <= 1)) return;
+    if (g.strokes.length < 12000) g.strokes.push(clean);
+    privateEmit(room, 1 - idx, 'seg', clean);
+  });
+
+  socket.on('drawClear', () => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'draw' || g.phase !== 'draw') return;
+    if (socket.data.idx !== g.round % 2) return;
+    g.strokes = [];
+    io.to(room.code).emit('clearCanvas');
+  });
+
+  socket.on('drawGuess', ({ text }) => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'draw' || g.phase !== 'draw') return;
+    const idx = socket.data.idx;
+    if (idx === g.round % 2) return; // drawer can't guess
+    const guess = String(text || '').trim().toLowerCase().slice(0, 40);
+    if (!guess) return;
+    if (guess === g.word) {
+      if (g.timer) clearTimeout(g.timer);
+      g.score++;
+      g.phase = 'reveal';
+      g.lastResult = 'guessed';
+      g.lastWord = g.word;
+      broadcast(room);
+    } else {
+      io.to(room.code).emit('guessShown', { name: room.players[idx] ? room.players[idx].name : '?', guess });
+    }
+  });
+
+  socket.on('drawSkip', () => {
+    const room = getRoom();
+    const g = room && room.game;
+    if (!g || g.type !== 'draw' || g.phase !== 'draw') return;
+    if (socket.data.idx !== g.round % 2) return;
+    if (g.timer) clearTimeout(g.timer);
+    g.phase = 'reveal';
+    g.lastResult = 'skipped';
+    g.lastWord = g.word;
+    broadcast(room);
+  });
+
   socket.on('playAgain', () => {
     const room = getRoom();
     const g = room && room.game;
     if (!g || !g.finished) return;
+    if (g.timer) clearTimeout(g.timer);
     // In board games, alternate who starts each rematch.
-    const alternates = ['c4', 'ttt', 'mem'];
+    const alternates = ['c4', 'ttt', 'mem', 'bs'];
     room.game = newGame(g.type, alternates.includes(g.type) ? 1 - g.starter : 0);
     broadcast(room);
+    syncPrivate(room, 0);
+    syncPrivate(room, 1);
   });
 
   // Either partner sets the day they started dating; both devices store it.
@@ -652,6 +924,7 @@ io.on('connection', (socket) => {
   socket.on('backToMenu', () => {
     const room = getRoom();
     if (!room || room.phase !== 'playing') return;
+    if (room.game && room.game.timer) clearTimeout(room.game.timer);
     room.game = null;
     room.phase = 'menu';
     broadcast(room);

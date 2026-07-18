@@ -203,4 +203,17 @@ const Q36 = [
   "Share a personal problem and ask my advice. Then ask me how I think you're feeling about it.",
 ];
 
-module.exports = { WYR, TOT, WKM, TOD_TRUTHS, TOD_DARES, Q36 };
+// Drawing & Guessing — easy-to-draw single words.
+const DRAW_WORDS = [
+  "heart", "sun", "moon", "star", "house", "tree", "flower", "cat", "dog",
+  "fish", "bird", "car", "bus", "bicycle", "train", "plane", "boat", "pizza",
+  "burger", "cake", "apple", "banana", "cup", "coffee", "book", "phone",
+  "clock", "key", "door", "window", "chair", "table", "bed", "lamp", "shoe",
+  "hat", "shirt", "glasses", "umbrella", "rain", "cloud", "snowman", "beach",
+  "mountain", "bridge", "candle", "balloon", "gift", "ring", "crown", "ghost",
+  "robot", "rocket", "rainbow", "butterfly", "spider", "snake", "turtle",
+  "elephant", "lion", "monkey", "penguin", "guitar", "drum", "camera",
+  "ladder", "kite", "cactus", "igloo", "lighthouse",
+];
+
+module.exports = { WYR, TOT, WKM, TOD_TRUTHS, TOD_DARES, Q36, DRAW_WORDS };

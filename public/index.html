@@ -133,6 +133,24 @@
             <span class="game-desc">Flip pairs on a shared board — match and go again</span>
           </span>
         </button>
+        <button class="game-card" data-game="bs">
+          <span class="game-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 20a2.4 2.4 0 0 0 2 1 2.4 2.4 0 0 0 2-1 2.4 2.4 0 0 1 2-1 2.4 2.4 0 0 1 2 1 2.4 2.4 0 0 0 2 1 2.4 2.4 0 0 0 2-1 2.4 2.4 0 0 1 2-1 2.4 2.4 0 0 1 2 1 2.4 2.4 0 0 0 2 1 2.4 2.4 0 0 0 2-1"/><path d="M4 18l-1-5h18l-1 5"/><path d="M5 13V7h4"/><path d="M12 13V4h3l4 5"/></svg>
+          </span>
+          <span class="game-info">
+            <span class="game-name">Battleship</span>
+            <span class="game-desc">Hide your fleet, hunt theirs — hits earn extra shots</span>
+          </span>
+        </button>
+        <button class="game-card" data-game="draw">
+          <span class="game-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+          </span>
+          <span class="game-info">
+            <span class="game-name">Drawing & Guessing</span>
+            <span class="game-desc">Draw the secret word, partner guesses — team score</span>
+          </span>
+        </button>
         <button class="game-card" data-game="rps">
           <span class="game-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
@@ -202,6 +220,61 @@
         <div id="c4-actions" class="c4-actions hidden">
           <button id="btn-c4-again" class="btn btn-primary">Rematch</button>
           <button id="btn-c4-menu" class="btn btn-secondary">Back to menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- BATTLESHIP -->
+    <section id="screen-bs" class="screen hidden">
+      <div class="topbar">
+        <button id="btn-bs-quit" class="btn-link">← Menu</button>
+        <span class="room-chip">Battleship</span>
+      </div>
+      <div class="card center">
+        <p id="bs-status" class="kicker"></p>
+        <div id="bs-enemy-wrap">
+          <p class="muted center-text bs-board-label">Their waters — tap to fire</p>
+          <div id="bs-enemy" class="bs-board"></div>
+        </div>
+        <p class="muted center-text bs-board-label">Your fleet</p>
+        <div id="bs-own" class="bs-board bs-own"></div>
+        <div id="bs-place-actions" class="c4-actions hidden">
+          <button id="btn-bs-shuffle" class="btn btn-secondary">Shuffle ships</button>
+          <button id="btn-bs-ready" class="btn btn-primary">Ready to battle</button>
+        </div>
+        <div id="bs-actions" class="c4-actions hidden">
+          <button id="btn-bs-again" class="btn btn-primary">Rematch</button>
+          <button id="btn-bs-menu" class="btn btn-secondary">Back to menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- DRAWING & GUESSING -->
+    <section id="screen-draw" class="screen hidden">
+      <div class="topbar">
+        <button id="btn-draw-quit" class="btn-link">← Menu</button>
+        <span id="draw-chip" class="room-chip"></span>
+      </div>
+      <div class="card center">
+        <p id="draw-status" class="kicker"></p>
+        <p id="draw-word-hint" class="draw-hint"></p>
+        <div id="draw-pick" class="options hidden" style="width:100%"></div>
+        <canvas id="draw-canvas" width="600" height="600"></canvas>
+        <div id="draw-tools" class="draw-tools hidden">
+          <button class="draw-color selected" data-color="#18181b" style="background:#18181b"></button>
+          <button class="draw-color" data-color="#e11d48" style="background:#e11d48"></button>
+          <button class="draw-color" data-color="#2563eb" style="background:#2563eb"></button>
+          <button class="draw-color" data-color="#059669" style="background:#059669"></button>
+          <button id="btn-draw-clear" class="btn-mini">Clear</button>
+          <button id="btn-draw-skip" class="btn-mini">Skip word</button>
+        </div>
+        <div id="draw-guess-box" class="draw-guess hidden">
+          <input id="draw-guess-input" type="text" maxlength="40" placeholder="Your guess…" autocomplete="off" />
+          <button id="btn-draw-guess" class="btn btn-primary" style="width:auto">Guess</button>
+        </div>
+        <p id="draw-feed" class="muted center-text"></p>
+        <div id="draw-reveal-actions" class="c4-actions hidden">
+          <button id="btn-draw-next" class="btn btn-primary">Next round →</button>
         </div>
       </div>
     </section>

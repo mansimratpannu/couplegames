@@ -16,7 +16,7 @@ let myIdx = null;
 let state = null;
 
 const $ = (id) => document.getElementById(id);
-const screens = ['home', 'wait', 'menu', 'us', 'play', 'c4', 'results'];
+const screens = ['home', 'wait', 'menu', 'us', 'play', 'c4', 'bs', 'draw', 'results'];
 
 function show(name) {
   screens.forEach((s) => $('screen-' + s).classList.toggle('hidden', s !== name));
@@ -40,6 +40,8 @@ const GAME_NAMES = {
   ttt: 'Tic-Tac-Toe',
   mem: 'Memory Match',
   rps: 'Rock Paper Scissors',
+  bs: 'Battleship',
+  draw: 'Drawing & Guessing',
 };
 
 const BOARD_GAMES = ['c4', 'ttt', 'mem'];
@@ -321,7 +323,15 @@ function render() {
     renderBoard(g);
     return show('c4');
   }
+  if (g.type === 'bs') {
+    renderBs(g);
+    return show('bs');
+  }
   if (g.finished) return renderResults(g);
+  if (g.type === 'draw') {
+    renderDraw(g);
+    return show('draw');
+  }
   if (g.type === 'tod') renderTod(g);
   else if (g.type === 'q36') renderQ36(g);
   else if (g.type === 'rps') renderRps(g);
@@ -405,12 +415,16 @@ function renderUs() {
     ['Tic-Tac-Toe wins', p.tttWins],
     ['Memory Match wins', p.memWins],
     ['Rock Paper Scissors wins', p.rpsWins],
+    ['Battleship wins', p.bsWins],
   ];
   for (const [label, map] of winMaps) {
     const names = Object.keys(map || {});
     if (names.length) {
       box.appendChild(statRow(label, names.map((n) => `${n} ${map[n]}`).join(' · ')));
     }
+  }
+  if (p.drawBest > 0) {
+    box.appendChild(statRow('Drawing best team score', `${p.drawBest}/6`));
   }
   for (const [type, name] of Object.entries(GAME_NAMES)) {
     if (played[type]) box.appendChild(statRow(name, `played ${played[type]}×`));
@@ -549,6 +563,229 @@ function renderBoard(g) {
   }
 
   $('c4-actions').classList.toggle('hidden', !g.finished);
+}
+
+// ---------------------------------------------------------------------------
+// Battleship
+// ---------------------------------------------------------------------------
+let bsShips = null; // { gameId, ships: [[cells]] } — our own secret fleet
+
+socket.on('bsLayout', (p) => {
+  bsShips = p;
+  render();
+});
+
+$('btn-bs-quit').addEventListener('click', () => socket.emit('backToMenu'));
+$('btn-bs-menu').addEventListener('click', () => socket.emit('backToMenu'));
+$('btn-bs-again').addEventListener('click', () => socket.emit('playAgain'));
+$('btn-bs-shuffle').addEventListener('click', () => socket.emit('bsShuffle'));
+$('btn-bs-ready').addEventListener('click', () => socket.emit('bsReady'));
+
+function bsGrid(el, cellFn) {
+  el.innerHTML = '';
+  for (let i = 0; i < 64; i++) el.appendChild(cellFn(i));
+}
+
+function renderBs(g) {
+  const myShipCells = new Set(
+    bsShips && bsShips.gameId === g.id ? bsShips.ships.flat() : []
+  );
+  const placing = g.phase === 'place';
+  const myTurn = g.turn === myIdx && g.phase === 'battle' && !g.finished;
+
+  if (g.finished) {
+    $('bs-status').textContent = g.winner === myIdx ? 'You sank their whole fleet!' : `${nameOf(g.winner)} sank your fleet!`;
+    if (g.winner === myIdx) celebrateOnce('bs-' + g.id);
+  } else if (placing) {
+    $('bs-status').textContent = g.ready[myIdx]
+      ? `Waiting for ${nameOf(1 - myIdx)} to place their ships…`
+      : 'Place your fleet — shuffle until you like it';
+  } else {
+    $('bs-status').textContent = myTurn ? 'Your shot — a hit earns another!' : `${nameOf(g.turn)} is aiming…`;
+  }
+
+  $('bs-enemy-wrap').classList.toggle('hidden', placing);
+  $('bs-place-actions').classList.toggle('hidden', !placing || g.ready[myIdx]);
+  $('bs-actions').classList.toggle('hidden', !g.finished);
+
+  // Enemy waters: our shots + their sunk ships.
+  if (!placing) {
+    const myShots = g.shots[myIdx];
+    const enemySunk = new Set((g.sunk[1 - myIdx] || []).flat());
+    bsGrid($('bs-enemy'), (i) => {
+      const cell = document.createElement('button');
+      cell.className = 'bs-cell';
+      const shot = myShots[i];
+      if (shot === 'hit') cell.classList.add(enemySunk.has(i) ? 'sunk' : 'hit');
+      else if (shot === 'miss') cell.classList.add('miss');
+      cell.disabled = !myTurn || !!shot;
+      cell.addEventListener('click', () => socket.emit('bsFire', { cell: i }));
+      return cell;
+    });
+  }
+
+  // Our fleet: ships + incoming shots.
+  const theirShots = g.shots[1 - myIdx];
+  bsGrid($('bs-own'), (i) => {
+    const cell = document.createElement('span');
+    cell.className = 'bs-cell own';
+    if (myShipCells.has(i)) cell.classList.add('ship');
+    const shot = theirShots[i];
+    if (shot === 'hit') cell.classList.add('hit');
+    else if (shot === 'miss') cell.classList.add('miss');
+    return cell;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Drawing & Guessing
+// ---------------------------------------------------------------------------
+let drawPrivate = { gameId: null, options: null, word: null };
+let drawColor = '#18181b';
+let drawCountdownTimer = null;
+
+const canvas = $('draw-canvas');
+const dctx = canvas.getContext('2d');
+dctx.lineCap = 'round';
+dctx.lineJoin = 'round';
+
+function paintSeg(s) {
+  dctx.strokeStyle = s.c;
+  dctx.lineWidth = 7;
+  dctx.beginPath();
+  dctx.moveTo(s.x0 * canvas.width, s.y0 * canvas.height);
+  dctx.lineTo(s.x1 * canvas.width, s.y1 * canvas.height);
+  dctx.stroke();
+}
+
+socket.on('seg', paintSeg);
+socket.on('clearCanvas', () => dctx.clearRect(0, 0, canvas.width, canvas.height));
+socket.on('drawStrokes', (p) => {
+  dctx.clearRect(0, 0, canvas.width, canvas.height);
+  (p.strokes || []).forEach(paintSeg);
+});
+socket.on('drawOptions', (p) => {
+  drawPrivate = { gameId: p.gameId, options: p.options, word: null };
+  render();
+});
+socket.on('drawWord', (p) => {
+  drawPrivate = { gameId: p.gameId, options: null, word: p.word };
+  render();
+});
+socket.on('guessShown', ({ name, guess }) => {
+  $('draw-feed').textContent = `${name} guessed: “${guess}”`;
+});
+
+// Drawer input: pointer events emit normalized segments.
+let drawing = false;
+let lastPt = null;
+
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+    y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+  };
+}
+
+function iAmDrawer() {
+  const g = state && state.game;
+  return g && g.type === 'draw' && g.phase === 'draw' && g.drawer === myIdx;
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!iAmDrawer()) return;
+  drawing = true;
+  lastPt = canvasPoint(e);
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drawing || !iAmDrawer()) return;
+  const pt = canvasPoint(e);
+  const seg = { x0: lastPt.x, y0: lastPt.y, x1: pt.x, y1: pt.y, c: drawColor };
+  paintSeg(seg);
+  socket.emit('drawSeg', seg);
+  lastPt = pt;
+});
+['pointerup', 'pointercancel'].forEach((ev) =>
+  canvas.addEventListener(ev, () => { drawing = false; lastPt = null; }));
+
+document.querySelectorAll('.draw-color').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    drawColor = btn.dataset.color;
+    document.querySelectorAll('.draw-color').forEach((b) => b.classList.toggle('selected', b === btn));
+  });
+});
+$('btn-draw-clear').addEventListener('click', () => socket.emit('drawClear'));
+$('btn-draw-skip').addEventListener('click', () => socket.emit('drawSkip'));
+$('btn-draw-quit').addEventListener('click', () => socket.emit('backToMenu'));
+$('btn-draw-next').addEventListener('click', () => socket.emit('next'));
+
+function sendGuess() {
+  const text = $('draw-guess-input').value.trim();
+  if (!text) return;
+  socket.emit('drawGuess', { text });
+  $('draw-guess-input').value = '';
+}
+$('btn-draw-guess').addEventListener('click', sendGuess);
+$('draw-guess-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendGuess(); });
+
+function renderDraw(g) {
+  $('draw-chip').textContent = `Round ${g.round + 1}/${g.total} · Score ${g.score}`;
+  const drawer = g.drawer;
+  const iDraw = drawer === myIdx;
+
+  const pickBox = $('draw-pick');
+  pickBox.classList.add('hidden');
+  $('draw-tools').classList.toggle('hidden', !(iDraw && g.phase === 'draw'));
+  $('draw-guess-box').classList.toggle('hidden', !(!iDraw && g.phase === 'draw'));
+  $('draw-reveal-actions').classList.toggle('hidden', g.phase !== 'reveal');
+  canvas.classList.toggle('draw-active', iDraw && g.phase === 'draw');
+
+  clearInterval(drawCountdownTimer);
+  drawCountdownTimer = null;
+
+  if (g.phase === 'pick') {
+    $('draw-feed').textContent = '';
+    $('draw-word-hint').textContent = '';
+    if (iDraw) {
+      $('draw-status').textContent = 'Pick a word to draw';
+      if (drawPrivate.gameId === g.id && drawPrivate.options) {
+        pickBox.classList.remove('hidden');
+        pickBox.innerHTML = '';
+        drawPrivate.options.forEach((w, i) => {
+          const b = document.createElement('button');
+          b.className = 'option';
+          b.textContent = w;
+          b.addEventListener('click', () => socket.emit('drawPick', { i }));
+          pickBox.appendChild(b);
+        });
+      }
+    } else {
+      $('draw-status').textContent = `${nameOf(drawer)} is picking a word…`;
+    }
+  } else if (g.phase === 'draw') {
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((g.deadline - Date.now()) / 1000));
+      $('draw-status').textContent = (iDraw ? 'Draw!' : `${nameOf(drawer)} is drawing…`) + ` · ${left}s`;
+    };
+    tick();
+    drawCountdownTimer = setInterval(tick, 1000);
+    $('draw-word-hint').textContent = iDraw
+      ? (drawPrivate.gameId === g.id && drawPrivate.word ? `Your word: ${drawPrivate.word}` : '')
+      : Array(g.wordLen || 0).fill('_').join(' ');
+  } else if (g.phase === 'reveal') {
+    const messages = {
+      guessed: `${nameOf(1 - drawer)} guessed it!`,
+      timeout: "Time's up!",
+      skipped: `${nameOf(drawer)} skipped it`,
+    };
+    $('draw-status').textContent = messages[g.lastResult] || 'Round over';
+    $('draw-word-hint').textContent = `The word was: ${g.lastWord}`;
+    $('draw-feed').textContent = '';
+    $('btn-draw-next').textContent = g.round + 1 >= g.total ? 'See results' : 'Next round →';
+    if (g.lastResult === 'guessed') celebrateOnce(`rev-${g.id}-${g.round}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +956,18 @@ function renderResults(g) {
   const big = $('results-big');
   const detail = $('results-detail');
 
+  if (g.type === 'draw') {
+    title.textContent = 'Drawing & Guessing';
+    big.textContent = `${g.score}/${g.total}`;
+    const flavor =
+      g.score === g.total ? 'A perfect team. Museum-worthy communication.' :
+      g.score >= 4 ? 'You two are seriously on the same wavelength.' :
+      g.score >= 2 ? 'Some masterpieces just need more time.' :
+      'Abstract art is still art.';
+    detail.textContent = `You guessed ${g.score} of ${g.total} as a team — ${flavor}`;
+    if (g.score >= 4) celebrateOnce('res-' + g.id);
+    return show('results');
+  }
   if (g.type === 'rps') {
     title.textContent = 'Rock Paper Scissors';
     big.textContent = `${g.scores[0]} – ${g.scores[1]}`;
