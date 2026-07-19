@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Couple Games</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e11d48'><path d='M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z'/></svg>" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#e11d48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Couple Games" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -56,6 +62,16 @@
         <span class="game-info">
           <span id="us-card-title" class="game-name">Us</span>
           <span id="us-card-sub" class="game-desc">Days together, stats & your story</span>
+        </span>
+        <span class="us-arrow">→</span>
+      </button>
+      <button id="list-card" class="us-card list-card">
+        <span class="us-heart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </span>
+        <span class="game-info">
+          <span class="game-name">Bucket List</span>
+          <span id="list-card-sub" class="game-desc">Things to do together & the date wheel</span>
         </span>
         <span class="us-arrow">→</span>
       </button>
@@ -185,6 +201,29 @@
         <h2>Our stats</h2>
         <div id="us-stats" class="stats-list"></div>
         <p class="muted">Stats are saved on both your phones and sync whenever you play together.</p>
+      </div>
+    </section>
+
+    <!-- BUCKET LIST -->
+    <section id="screen-list" class="screen hidden">
+      <div class="topbar">
+        <button id="btn-list-back" class="btn-link">← Back</button>
+        <span id="list-room" class="room-chip"></span>
+      </div>
+      <div class="card">
+        <h2>Bucket List</h2>
+        <div class="draw-guess">
+          <input id="list-input" type="text" maxlength="80" placeholder="Something you want to do together…" autocomplete="off" />
+          <button id="btn-list-add" class="btn btn-primary" style="width:auto">Add</button>
+        </div>
+        <div id="list-items" class="list-items"></div>
+        <p id="list-empty" class="muted center-text hidden">Nothing here yet — add your first dream date, trip, or tiny adventure.</p>
+      </div>
+      <div class="card center">
+        <h2>Date Wheel</h2>
+        <p class="muted center-text">Can't decide? Let fate pick from your unchecked items.</p>
+        <div id="wheel-display" class="wheel-display hidden"></div>
+        <button id="btn-spin" class="btn btn-primary">Spin the wheel</button>
       </div>
     </section>
 

@@ -16,7 +16,12 @@ let myIdx = null;
 let state = null;
 
 const $ = (id) => document.getElementById(id);
-const screens = ['home', 'wait', 'menu', 'us', 'play', 'c4', 'bs', 'draw', 'results'];
+const screens = ['home', 'wait', 'menu', 'us', 'list', 'play', 'c4', 'bs', 'draw', 'results'];
+
+// Installable app: register the (network-passthrough) service worker.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 
 function show(name) {
   screens.forEach((s) => $('screen-' + s).classList.toggle('hidden', s !== name));
@@ -118,11 +123,44 @@ function confetti() {
   })(start);
 }
 
+// ---------------------------------------------------------------------------
+// Subtle sounds + haptics (Web Audio, no files; created after first tap)
+// ---------------------------------------------------------------------------
+let audioCtx = null;
+document.addEventListener('pointerdown', () => {
+  if (audioCtx) return;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* no audio */ }
+});
+
+function beep(freq, delay, dur, vol = 0.1) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime + delay;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(t);
+  o.stop(t + dur + 0.05);
+}
+
+function vibrate(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) { /* ignore */ }
+}
+
+function soundMatch() { beep(660, 0, 0.15); beep(880, 0.12, 0.22); vibrate(30); }
+function soundWin() { beep(523, 0, 0.15); beep(659, 0.13, 0.15); beep(784, 0.26, 0.3); vibrate([40, 60, 40]); }
+
 let lastCelebration = null; // avoid re-firing on re-renders
-function celebrateOnce(key) {
+function celebrateOnce(key, kind = 'win') {
   if (lastCelebration === key) return;
   lastCelebration = key;
   confetti();
+  if (kind === 'match') soundMatch();
+  else soundWin();
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +334,7 @@ function render() {
 
   if (state.phase === 'menu') {
     if (showingUs) return renderUs();
+    if (showingList) return renderList();
     const names = state.players.map((p) => (p ? p.name : '?')).join(' & ');
     $('menu-names').textContent = names;
     $('menu-room').textContent = 'Room ' + state.code;
@@ -303,6 +342,11 @@ function render() {
     $('us-card-sub').textContent = days === null
       ? 'Set your anniversary — count the days together'
       : `${days.toLocaleString()} days together · see your stats`;
+    const bucket = ((profile && profile.bucket) || []).filter((i) => !i.deleted);
+    const bucketDone = bucket.filter((i) => i.done).length;
+    $('list-card-sub').textContent = bucket.length
+      ? `${bucketDone}/${bucket.length} done · spin the date wheel`
+      : 'Things to do together & the date wheel';
     const partner = state.players[1 - myIdx];
     const statusEl = $('partner-status');
     if (partner && !partner.connected) {
@@ -316,6 +360,7 @@ function render() {
 
   // phase === 'playing'
   showingUs = false;
+  showingList = false;
   const g = state.game;
   if (!g) return show('menu');
   if (BOARD_GAMES.includes(g.type)) {
@@ -426,10 +471,99 @@ function renderUs() {
   if (p.drawBest > 0) {
     box.appendChild(statRow('Drawing best team score', `${p.drawBest}/6`));
   }
+  const bucketItems = (p.bucket || []).filter((i) => !i.deleted);
+  if (bucketItems.length) {
+    box.appendChild(statRow('Bucket list', `${bucketItems.filter((i) => i.done).length}/${bucketItems.length} done`));
+  }
   for (const [type, name] of Object.entries(GAME_NAMES)) {
     if (played[type]) box.appendChild(statRow(name, `played ${played[type]}×`));
   }
   show('us');
+}
+
+// ---------------------------------------------------------------------------
+// Bucket list & date wheel
+// ---------------------------------------------------------------------------
+let showingList = false;
+let wheelSpinning = false;
+
+$('list-card').addEventListener('click', () => { showingList = true; render(); });
+$('btn-list-back').addEventListener('click', () => { showingList = false; render(); });
+
+function addBucketItem() {
+  const text = $('list-input').value.trim();
+  if (!text) return;
+  socket.emit('bucketAdd', { text });
+  $('list-input').value = '';
+}
+$('btn-list-add').addEventListener('click', addBucketItem);
+$('list-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addBucketItem(); });
+
+$('btn-spin').addEventListener('click', () => socket.emit('spinWheel'));
+
+socket.on('wheelResult', ({ id }) => {
+  const items = ((profile && profile.bucket) || []).filter((i) => !i.deleted && !i.done);
+  const winner = items.find((i) => i.id === id);
+  if (!winner || wheelSpinning) return;
+  showingList = true;
+  render();
+  const display = $('wheel-display');
+  display.classList.remove('hidden', 'landed');
+  wheelSpinning = true;
+  // Slot-machine style: cycle through options, slowing down, land on winner.
+  const pool = items.map((i) => i.text);
+  let step = 0;
+  const totalSteps = Math.min(18, 8 + pool.length * 2);
+  (function tick() {
+    if (step < totalSteps) {
+      display.textContent = pool[step % pool.length];
+      step++;
+      setTimeout(tick, 60 + step * 18);
+    } else {
+      display.textContent = winner.text;
+      display.classList.add('landed');
+      wheelSpinning = false;
+      confetti();
+      soundWin();
+    }
+  })();
+});
+
+function renderList() {
+  $('list-room').textContent = 'Room ' + state.code;
+  const items = ((profile && profile.bucket) || []).filter((i) => !i.deleted);
+  const box = $('list-items');
+  box.innerHTML = '';
+  $('list-empty').classList.toggle('hidden', items.length > 0);
+
+  const sorted = [...items].sort((x, y) => (x.done === y.done ? 0 : x.done ? 1 : -1));
+  for (const item of sorted) {
+    const row = document.createElement('div');
+    row.className = 'list-item' + (item.done ? ' done' : '');
+
+    const checkBtn = document.createElement('button');
+    checkBtn.className = 'list-check';
+    checkBtn.setAttribute('aria-label', item.done ? 'Mark as not done' : 'Mark as done');
+    checkBtn.addEventListener('click', () => socket.emit('bucketToggle', { id: item.id }));
+
+    const label = document.createElement('span');
+    label.className = 'list-text';
+    label.textContent = item.text;
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'list-del';
+    delBtn.textContent = '×';
+    delBtn.setAttribute('aria-label', 'Remove item');
+    delBtn.addEventListener('click', () => socket.emit('bucketDelete', { id: item.id }));
+
+    row.append(checkBtn, label, delBtn);
+    box.appendChild(row);
+  }
+
+  const spinnable = items.filter((i) => !i.done).length >= 2;
+  $('btn-spin').disabled = !spinnable;
+  $('btn-spin').textContent = spinnable ? 'Spin the wheel' : 'Add at least 2 unchecked items';
+  show('list');
 }
 
 // ---------------------------------------------------------------------------
@@ -784,7 +918,7 @@ function renderDraw(g) {
     $('draw-word-hint').textContent = `The word was: ${g.lastWord}`;
     $('draw-feed').textContent = '';
     $('btn-draw-next').textContent = g.round + 1 >= g.total ? 'See results' : 'Next round →';
-    if (g.lastResult === 'guessed') celebrateOnce(`rev-${g.id}-${g.round}`);
+    if (g.lastResult === 'guessed') celebrateOnce(`rev-${g.id}-${g.round}`, 'match');
   }
 }
 
@@ -835,7 +969,7 @@ function renderRps(g) {
       const w = (a - b + 3) % 3 === 1 ? 0 : 1;
       verdict.textContent = `${RPS_MOVES[g.answers[w]]} beats ${RPS_MOVES[g.answers[1 - w]]} — ${nameOf(w)} takes the round!`;
       verdict.className = 'verdict ' + (w === myIdx ? 'match' : 'differ');
-      if (w === myIdx) celebrateOnce(`rev-${g.id}-${g.round}`);
+      if (w === myIdx) celebrateOnce(`rev-${g.id}-${g.round}`, 'match');
     }
     rows.appendChild(revealRow(nameOf(0), RPS_MOVES[a]));
     rows.appendChild(revealRow(nameOf(1), RPS_MOVES[b]));
@@ -922,14 +1056,14 @@ function renderQuestion(g) {
       verdict.className = 'verdict ' + (correct ? 'match' : 'differ');
       rows.appendChild(revealRow(`${nameOf(subject)}'s answer`, options[g.answers[subject]]));
       rows.appendChild(revealRow(`${nameOf(guesser)}'s guess`, options[g.answers[guesser]]));
-      if (correct) celebrateOnce(`rev-${g.id}-${g.qIndex}`);
+      if (correct) celebrateOnce(`rev-${g.id}-${g.qIndex}`, 'match');
     } else {
       const match = g.answers[0] === g.answers[1];
       verdict.textContent = match ? 'You matched!' : 'Opposites attract';
       verdict.className = 'verdict ' + (match ? 'match' : 'differ');
       rows.appendChild(revealRow(nameOf(0), options[g.answers[0]]));
       rows.appendChild(revealRow(nameOf(1), options[g.answers[1]]));
-      if (match) celebrateOnce(`rev-${g.id}-${g.qIndex}`);
+      if (match) celebrateOnce(`rev-${g.id}-${g.qIndex}`, 'match');
     }
     $('btn-next').textContent = g.qIndex + 1 >= g.total ? 'See results' : 'Next →';
   } else {

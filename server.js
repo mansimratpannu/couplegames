@@ -255,8 +255,29 @@ function emptyProfile() {
     rpsWins: {},
     bsWins: {},
     drawBest: 0,
+    bucket: [],
     updatedAt: 0,
   };
+}
+
+// Bucket-list items are merged by id; the entry with the newer timestamp wins
+// (so checking off / deleting propagates across devices).
+function mergeBucket(a = [], b = []) {
+  const map = new Map();
+  for (const raw of [...a, ...b]) {
+    if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') continue;
+    const item = {
+      id: raw.id.slice(0, 24),
+      text: String(raw.text || '').slice(0, 80),
+      done: !!raw.done,
+      deleted: !!raw.deleted,
+      ts: num(raw.ts),
+    };
+    if (!item.text) continue;
+    const cur = map.get(item.id);
+    if (!cur || item.ts > cur.ts) map.set(item.id, item);
+  }
+  return [...map.values()].slice(0, 200);
 }
 
 function mergeCounts(a = {}, b = {}) {
@@ -288,6 +309,7 @@ function mergeProfiles(a, b) {
   out.rpsWins = mergeCounts(a.rpsWins, b.rpsWins);
   out.bsWins = mergeCounts(a.bsWins, b.bsWins);
   out.drawBest = Math.max(num(a.drawBest), num(b.drawBest));
+  out.bucket = mergeBucket(a.bucket, b.bucket);
   out.updatedAt = Date.now();
   return out;
 }
@@ -919,6 +941,58 @@ io.on('connection', (socket) => {
     if (!room) return;
     room.profile = mergeProfiles(room.profile, profile);
     io.to(room.code).emit('profile', room.profile);
+  });
+
+  // ---- Bucket list & date wheel ----
+  socket.on('bucketAdd', ({ text }) => {
+    const room = getRoom();
+    if (!room) return;
+    text = String(text || '').trim().slice(0, 80);
+    if (!text) return;
+    const p = room.profile;
+    p.bucket = p.bucket || [];
+    if (p.bucket.filter((i) => !i.deleted).length >= 200) return;
+    p.bucket.push({
+      id: Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+      text,
+      done: false,
+      deleted: false,
+      ts: Date.now(),
+    });
+    p.updatedAt = Date.now();
+    io.to(room.code).emit('profile', p);
+  });
+
+  socket.on('bucketToggle', ({ id }) => {
+    const room = getRoom();
+    if (!room) return;
+    const item = (room.profile.bucket || []).find((i) => i.id === id && !i.deleted);
+    if (!item) return;
+    item.done = !item.done;
+    item.ts = Date.now();
+    room.profile.updatedAt = Date.now();
+    io.to(room.code).emit('profile', room.profile);
+  });
+
+  socket.on('bucketDelete', ({ id }) => {
+    const room = getRoom();
+    if (!room) return;
+    const item = (room.profile.bucket || []).find((i) => i.id === id && !i.deleted);
+    if (!item) return;
+    item.deleted = true;
+    item.ts = Date.now();
+    room.profile.updatedAt = Date.now();
+    io.to(room.code).emit('profile', room.profile);
+  });
+
+  // Spin the date wheel: the server picks so both phones land on the same one.
+  socket.on('spinWheel', () => {
+    const room = getRoom();
+    if (!room) return;
+    const options = (room.profile.bucket || []).filter((i) => !i.done && !i.deleted);
+    if (options.length === 0) return;
+    const winner = options[Math.floor(Math.random() * options.length)];
+    io.to(room.code).emit('wheelResult', { id: winner.id });
   });
 
   socket.on('backToMenu', () => {

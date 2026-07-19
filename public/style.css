@@ -416,6 +416,56 @@ input[type="date"]:focus { outline: none; border-color: var(--accent); box-shado
 .draw-guess { display: flex; gap: 8px; width: 100%; }
 .draw-guess input { flex: 1; }
 
+/* Bucket list */
+.list-card { background: linear-gradient(120deg, #f0fdf4, #fff); border-color: #bbf7d0; }
+.list-card:hover { border-color: #86efac; }
+.list-card .us-heart { color: #059669; }
+.list-card .us-arrow { color: #059669; }
+.list-items { display: flex; flex-direction: column; gap: 8px; }
+.list-item {
+  display: flex; align-items: center; gap: 12px;
+  background: #f4f4f5; border-radius: 10px; padding: 10px 12px;
+}
+.list-check {
+  width: 24px; height: 24px; flex-shrink: 0;
+  border-radius: 50%; border: 2px solid #a1a1aa;
+  background: #fff; cursor: pointer; padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.list-item.done .list-check {
+  background: var(--good); border-color: var(--good);
+  position: relative;
+}
+.list-item.done .list-check::after {
+  content: ""; position: absolute; left: 6px; top: 2.5px;
+  width: 5px; height: 10px;
+  border: solid #fff; border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+.list-text { flex: 1; font-size: 15px; line-height: 1.4; word-break: break-word; }
+.list-item.done .list-text { text-decoration: line-through; color: var(--muted); }
+.list-del {
+  border: none; background: none; color: #a1a1aa;
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px;
+  border-radius: 6px; flex-shrink: 0;
+}
+.list-del:hover { color: var(--accent); background: var(--accent-soft); }
+
+/* Date wheel */
+.wheel-display {
+  width: 100%;
+  padding: 18px 16px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  border: 1px dashed rgba(225, 29, 72, 0.4);
+  font-size: 18px; font-weight: 700; text-align: center;
+  color: var(--accent-dark);
+  min-height: 58px;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.2s;
+}
+.wheel-display.landed { transform: scale(1.04); border-style: solid; }
+
 /* Toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
